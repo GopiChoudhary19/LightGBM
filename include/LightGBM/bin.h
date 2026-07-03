@@ -685,7 +685,8 @@ class MultiValBin {
                                         const std::vector<const BinMapper*> original_feature_bin_mappers, const bool use_pairwise_bin_lookup,
                                         const std::vector<std::vector<float>>* raw_data,
                                         const std::vector<uint32_t>& all_offsets, const std::vector<int>& diff_feature_to_original_feature_slot,
-                                        const std::vector<int>& diff_feature_to_raw_feature_index);
+                                        const std::vector<int>& diff_feature_to_raw_feature_index,
+                                        const std::string differential_feature_bin_mode);
 
   static MultiValBin* CreateMultiValDenseBin(data_size_t num_data, int num_bin,
                                              int num_feature, const std::vector<uint32_t>& offsets, const bool use_pairwise_ranking,
@@ -693,7 +694,8 @@ class MultiValBin {
                                              const std::vector<const BinMapper*> original_feature_bin_mappers, const bool use_pairwise_bin_lookup,
                                              const std::vector<std::vector<float>>* raw_data,
                                              const std::vector<uint32_t>& all_offsets, const std::vector<int>& diff_feature_to_original_feature_slot,
-                                        const std::vector<int>& diff_feature_to_raw_feature_index);
+                                             const std::vector<int>& diff_feature_to_raw_feature_index,
+                                             const std::string differential_feature_bin_mode);
 
   static MultiValBin* CreateMultiValSparseBin(data_size_t num_data, int num_bin, double estimate_element_per_row, const bool use_pairwise_ranking, const std::pair<data_size_t, data_size_t>* paired_ranking_item_global_index_map);
 

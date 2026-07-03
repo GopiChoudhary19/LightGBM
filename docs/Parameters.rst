@@ -1228,11 +1228,15 @@ Objective Parameters
 
    -  used only in ``pairwise_lambdarank`` application
 
--  ``use_ternary_differential_feature_bin`` :raw-html:`<a id="use_ternary_differential_feature_bin" title="Permalink to this parameter" href="#use_ternary_differential_feature_bin">&#x1F517;&#xFE0E;</a>`, default = ``false``, type = bool
+-  ``differential_feature_bin_mode`` :raw-html:`<a id="differential_feature_bin_mode" title="Permalink to this parameter" href="#differential_feature_bin_mode">&#x1F517;&#xFE0E;</a>`, default = ``std::string("ternary")``, type = string
 
-   -  whether to use ternary differential feature bins
+   -  mode for discretizing differential feature into bins
 
    -  used only in ``pairwise_lambdarank`` application and with use_differential_feature_in_pairwise_ranking = true
+
+   -  can be ``ternary``, ``exact`` or ``lookup``
+
+   -  when using ``exact``, ``pairwise_lambdarank_use_bin_lookup_table`` must be ``true``
 
 -  ``pairwise_lambdarank_use_bin_lookup_table`` :raw-html:`<a id="pairwise_lambdarank_use_bin_lookup_table" title="Permalink to this parameter" href="#pairwise_lambdarank_use_bin_lookup_table">&#x1F517;&#xFE0E;</a>`, default = ``false``, type = bool
 

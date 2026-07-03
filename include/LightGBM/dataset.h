@@ -735,9 +735,17 @@ class Dataset {
 
   void CopySubrowToDevice(const Dataset* fullset, const data_size_t* used_indices, data_size_t num_used_indices, bool need_meta_data, int gpu_device_id);
 
-  MultiValBin* GetMultiBinFromSparseFeatures(const std::vector<uint32_t>& offsets, const bool use_pairwise_ranking) const;
+  MultiValBin* GetMultiBinFromSparseFeatures(
+    const std::vector<uint32_t>& offsets,
+    const bool use_pairwise_ranking,
+    const std::string differential_feature_bin_mode) const;
 
-  MultiValBin* GetMultiBinFromAllFeatures(const std::vector<uint32_t>& offsets, const bool use_pairwise_ranking, const bool use_raw_data_in_pairwise_ranking_diff, const bool use_pairwise_bin_lookup) const;
+  MultiValBin* GetMultiBinFromAllFeatures(
+    const std::vector<uint32_t>& offsets,
+    const bool use_pairwise_ranking,
+    const bool use_raw_data_in_pairwise_ranking_diff,
+    const bool use_pairwise_bin_lookup,
+    const std::string differential_feature_bin_mode) const;
 
   template <bool USE_QUANT_GRAD, int HIST_BITS>
   TrainingShareStates* GetShareStates(
@@ -746,7 +754,8 @@ class Dataset {
       bool force_col_wise, bool force_row_wise, const int num_grad_quant_bins,
       const bool use_pairwise_ranking,
       const bool use_raw_data_in_pairwise_ranking_diff,
-      const bool use_pairwise_bin_lookup) const;
+      const bool use_pairwise_bin_lookup,
+      const std::string differential_feature_bin_mode) const;
 
   LIGHTGBM_EXPORT void FinishLoad();
 

@@ -38,12 +38,14 @@ class MultiValDensePairwiseLambdarankBin
       const std::vector<std::vector<float>>* raw_data,
       const std::vector<uint32_t>& all_offsets,
       const std::vector<int>& diff_feature_to_original_feature_slot,
-      const std::vector<int>& diff_feature_to_raw_feature_index)
+      const std::vector<int>& diff_feature_to_raw_feature_index,
+      const std::string differential_feature_bin_mode)
       : MultiValPairwiseLambdarankBin<BIN_TYPE, LightGBM::MultiValDenseBin>(
             num_data, num_bin, num_feature, offsets),
         diff_feature_to_original_feature_slot_(diff_feature_to_original_feature_slot),
         pointwise_histogram_buffers_(OMP_NUM_THREADS()),
-        use_fast_pairwise_bin_lookup_(use_pairwise_bin_lookup) {
+        use_fast_pairwise_bin_lookup_(use_pairwise_bin_lookup),
+        differential_feature_bin_mode_(differential_feature_bin_mode) {
     this->paired_ranking_item_global_index_map_ =
         paired_ranking_item_global_index_map;
     CHECK_EQ(diff_feature_bin_mappers.size(), diff_feature_to_original_feature_slot.size());
@@ -78,6 +80,7 @@ class MultiValDensePairwiseLambdarankBin
           active_diff_feature_hist_offsets_.push_back(diff_feature_hist_offsets_[j]);
           active_diff_feature_bin_value_offsets_.push_back(diff_feature_bin_value_offsets_[j]);
           active_diff_feature_bin_mappers_.push_back(diff_feature_bin_mappers_[j].get());
+          active_diff_feature_to_original_feature_slot_.push_back(diff_feature_to_original_feature_slot_[j]);
           use_fast_pairwise_bin_lookup_ &= diff_feature_bin_mappers_[j]->HasPairwiseBinRanges();
         }
       } else {
@@ -167,45 +170,106 @@ class MultiValDensePairwiseLambdarankBin
         pointwise_buffer.AddFirst(first_idx, gradient, hessian, stamp);
         pointwise_buffer.AddSecond(second_idx, gradient, hessian, stamp);
 
-        const float* first_row_diff_feature_raw_values =
-            diff_feature_raw_values +
-            static_cast<size_t>(first_idx) * num_active_diff_features_;
-        const float* second_row_diff_feature_raw_values =
-            diff_feature_raw_values +
-            static_cast<size_t>(second_idx) * num_active_diff_features_;
-        for (int active_j = 0; active_j < num_active_diff_features_; ++active_j) {
-          // const int original_feature_slot = diff_feature_to_original_feature_slot_[j];
-          // uint32_t first_bin = static_cast<uint32_t>(first_data_ptr[original_feature_slot]);
-          // uint32_t second_bin = static_cast<uint32_t>(second_data_ptr[original_feature_slot]);
-          const float diff_value =
-              first_row_diff_feature_raw_values[active_j] -
-              second_row_diff_feature_raw_values[active_j];
+        if (differential_feature_bin_mode_ == std::string("ternary")) {
 
-          const uint32_t diff_bin =
-              static_cast<uint32_t>(diff_value > static_cast<float>(-kEpsilon)) +
-              static_cast<uint32_t>(diff_value > static_cast<float>(kEpsilon));
-          // if (first_bin >= original_feature_bin_value_offsets_[j]) {
-          //   first_bin -= original_feature_bin_value_offsets_[j];
-          // } else {
-          //   CHECK_EQ(first_bin, 0);
-          //   first_bin = original_feature_most_freq_bins_[j];
-          // }
-          // if (second_bin >= original_feature_bin_value_offsets_[j]) {
-          //   second_bin -= original_feature_bin_value_offsets_[j];
-          // } else {
-          //   CHECK_EQ(second_bin, 0);
-          //   second_bin = original_feature_most_freq_bins_[j];
-          // }
+          const float* first_row_diff_feature_raw_values =
+              diff_feature_raw_values +
+              static_cast<size_t>(first_idx) * num_active_diff_features_;
+          const float* second_row_diff_feature_raw_values =
+              diff_feature_raw_values +
+              static_cast<size_t>(second_idx) * num_active_diff_features_;
+          for (int active_j = 0; active_j < num_active_diff_features_; ++active_j) {
+            const float diff_value =
+                first_row_diff_feature_raw_values[active_j] -
+                second_row_diff_feature_raw_values[active_j];
 
-          // const uint32_t diff_bin =
-          //     diff_feature_bin_mappers_[j]->ValueToBinWithPairwiseRangeUnchecked(
-          //         diff_value, first_bin, second_bin, original_feature_slot);
-          // // The original row-wise bins already exclude feature-group offsets.
-          // // Differential features still need the single-feature-group packing fix below.
-          const uint32_t bin = diff_bin + active_diff_feature_bin_value_offsets_[active_j];
-          const auto ti = (bin + active_diff_feature_hist_offsets_[active_j]) << 1;
-          grad[ti] += gradient;
-          hess[ti] += hessian;
+            const uint32_t diff_bin =
+                static_cast<uint32_t>(diff_value > static_cast<float>(-kEpsilon)) +
+                static_cast<uint32_t>(diff_value > static_cast<float>(kEpsilon));
+            // The original row-wise bins already exclude feature-group offsets.
+            // Differential features still need the single-feature-group packing fix below.
+            const uint32_t bin = diff_bin + active_diff_feature_bin_value_offsets_[active_j];
+            const auto ti = (bin + active_diff_feature_hist_offsets_[active_j]) << 1;
+            grad[ti] += gradient;
+            hess[ti] += hessian;
+          }
+        } else if (differential_feature_bin_mode_ == std::string("exact")) {
+          const BIN_TYPE* first_data_ptr = this->data_.data() + this->RowPtr(first_idx);
+          const BIN_TYPE* second_data_ptr = this->data_.data() + this->RowPtr(second_idx);
+
+          const float* first_row_diff_feature_raw_values =
+              diff_feature_raw_values +
+              static_cast<size_t>(first_idx) * num_active_diff_features_;
+          const float* second_row_diff_feature_raw_values =
+              diff_feature_raw_values +
+              static_cast<size_t>(second_idx) * num_active_diff_features_;
+          for (int active_j = 0; active_j < num_active_diff_features_; ++active_j) {
+            const int original_feature_slot = active_diff_feature_to_original_feature_slot_[active_j];
+            uint32_t first_bin = static_cast<uint32_t>(first_data_ptr[original_feature_slot]);
+            uint32_t second_bin = static_cast<uint32_t>(second_data_ptr[original_feature_slot]);
+            const float diff_value =
+                first_row_diff_feature_raw_values[active_j] -
+                second_row_diff_feature_raw_values[active_j];
+            if (first_bin >= original_feature_bin_value_offsets_[active_j]) {
+              first_bin -= original_feature_bin_value_offsets_[active_j];
+            } else {
+              CHECK_EQ(first_bin, 0);
+              first_bin = original_feature_most_freq_bins_[active_j];
+            }
+            if (second_bin >= original_feature_bin_value_offsets_[active_j]) {
+              second_bin -= original_feature_bin_value_offsets_[active_j];
+            } else {
+              CHECK_EQ(second_bin, 0);
+              second_bin = original_feature_most_freq_bins_[active_j];
+            }
+
+            const uint32_t diff_bin =
+                active_diff_feature_bin_mappers_[active_j]->ValueToBinWithPairwiseRangeUnchecked(
+                    diff_value, first_bin, second_bin, original_feature_slot);
+            // The original row-wise bins already exclude feature-group offsets.
+            // Differential features still need the single-feature-group packing fix below.
+            const uint32_t bin = diff_bin + active_diff_feature_bin_value_offsets_[active_j];
+            const auto ti = (bin + active_diff_feature_hist_offsets_[active_j]) << 1;
+            grad[ti] += gradient;
+            hess[ti] += hessian;
+          }
+        } else {
+          const BIN_TYPE* first_data_ptr = this->data_.data() + this->RowPtr(first_idx);
+          const BIN_TYPE* second_data_ptr = this->data_.data() + this->RowPtr(second_idx);
+
+          const float* first_row_diff_feature_raw_values =
+              diff_feature_raw_values +
+              static_cast<size_t>(first_idx) * num_active_diff_features_;
+          const float* second_row_diff_feature_raw_values =
+              diff_feature_raw_values +
+              static_cast<size_t>(second_idx) * num_active_diff_features_;
+          for (int active_j = 0; active_j < num_active_diff_features_; ++active_j) {
+            const int original_feature_slot = active_diff_feature_to_original_feature_slot_[active_j];
+            uint32_t first_bin = static_cast<uint32_t>(first_data_ptr[original_feature_slot]);
+            uint32_t second_bin = static_cast<uint32_t>(second_data_ptr[original_feature_slot]);
+
+            if (first_bin >= original_feature_bin_value_offsets_[active_j]) {
+              first_bin -= original_feature_bin_value_offsets_[active_j];
+            } else {
+              CHECK_EQ(first_bin, 0);
+              first_bin = original_feature_most_freq_bins_[active_j];
+            }
+            if (second_bin >= original_feature_bin_value_offsets_[active_j]) {
+              second_bin -= original_feature_bin_value_offsets_[active_j];
+            } else {
+              CHECK_EQ(second_bin, 0);
+              second_bin = original_feature_most_freq_bins_[active_j];
+            }
+
+            const uint32_t diff_bin =
+                active_diff_feature_bin_mappers_[active_j]->GetPairwiseBinRange(first_bin, second_bin).first;
+            // The original row-wise bins already exclude feature-group offsets.
+            // Differential features still need the single-feature-group packing fix below.
+            const uint32_t bin = diff_bin + active_diff_feature_bin_value_offsets_[active_j];
+            const auto ti = (bin + active_diff_feature_hist_offsets_[active_j]) << 1;
+            grad[ti] += gradient;
+            hess[ti] += hessian;
+          }
         }
       }
     } else {
@@ -377,6 +441,7 @@ class MultiValDensePairwiseLambdarankBin
 
   std::vector<std::unique_ptr<const BinMapper>> diff_feature_bin_mappers_;
   std::vector<int> diff_feature_to_original_feature_slot_;
+  std::vector<int> active_diff_feature_to_original_feature_slot_;
   std::vector<uint32_t> diff_feature_hist_offsets_;
   std::vector<uint32_t> diff_feature_bin_value_offsets_;
   std::vector<uint32_t> original_feature_bin_value_offsets_;
@@ -391,6 +456,7 @@ class MultiValDensePairwiseLambdarankBin
   int num_diff_features_;
   int num_active_diff_features_ = 0;
   bool use_fast_pairwise_bin_lookup_;
+  std::string differential_feature_bin_mode_;
 };
 
 }  // namespace LightGBM
