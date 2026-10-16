@@ -69,22 +69,23 @@ class MultiValDensePairwiseLambdarankBin
       original_feature_bin_value_offsets_.push_back(
           1u - static_cast<uint32_t>(original_feature_bin_mappers[j]->GetMostFreqBin() == 0));
       original_feature_most_freq_bins_.push_back(original_feature_bin_mappers[j]->GetMostFreqBin());
+      const float* raw_data_ptr = nullptr;
       if (raw_data != nullptr && !raw_data->empty()) {
         const int raw_feature_index = diff_feature_to_raw_feature_index[j];
         CHECK_GE(raw_feature_index, 0);
         CHECK_LT(raw_feature_index, static_cast<int>(raw_data->size()));
-        const float* raw_data_ptr = (*raw_data)[raw_feature_index].data();
-        diff_feature_raw_data_ptrs_.push_back(raw_data_ptr);
-        if (raw_data_ptr != nullptr) {
-          active_diff_feature_slots_.push_back(j);
-          active_diff_feature_hist_offsets_.push_back(diff_feature_hist_offsets_[j]);
-          active_diff_feature_bin_value_offsets_.push_back(diff_feature_bin_value_offsets_[j]);
-          active_diff_feature_bin_mappers_.push_back(diff_feature_bin_mappers_[j].get());
-          active_diff_feature_to_original_feature_slot_.push_back(diff_feature_to_original_feature_slot_[j]);
-          use_fast_pairwise_bin_lookup_ &= diff_feature_bin_mappers_[j]->HasPairwiseBinRanges();
-        }
-      } else {
-        diff_feature_raw_data_ptrs_.push_back(nullptr);
+        raw_data_ptr = (*raw_data)[raw_feature_index].data();
+      }
+      diff_feature_raw_data_ptrs_.push_back(raw_data_ptr);
+      if (differential_feature_bin_mode_ == "lookup" || raw_data_ptr != nullptr) {
+        active_diff_feature_slots_.push_back(j);
+        active_diff_feature_hist_offsets_.push_back(diff_feature_hist_offsets_[j]);
+        active_diff_feature_bin_value_offsets_.push_back(diff_feature_bin_value_offsets_[j]);
+        active_diff_feature_bin_mappers_.push_back(diff_feature_bin_mappers_[j].get());
+        active_diff_feature_to_original_feature_slot_.push_back(diff_feature_to_original_feature_slot_[j]);
+        use_fast_pairwise_bin_lookup_ &= differential_feature_bin_mode_ == "lookup"
+            ? diff_feature_bin_mappers_[j]->HasPairwiseBinLookup()
+            : diff_feature_bin_mappers_[j]->HasPairwiseBinRanges();
       }
     }
     InitDiffFeatureRawValueBuffer(num_data);
@@ -150,10 +151,12 @@ class MultiValDensePairwiseLambdarankBin
                 this->paired_ranking_item_global_index_map_[pf_idx].second;
             PREFETCH_T0(this->data_.data() + this->RowPtr(pf_first_idx));
             PREFETCH_T0(this->data_.data() + this->RowPtr(pf_second_idx));
-            PREFETCH_T0(diff_feature_raw_values +
-                        static_cast<size_t>(pf_first_idx) * num_active_diff_features_);
-            PREFETCH_T0(diff_feature_raw_values +
-                        static_cast<size_t>(pf_second_idx) * num_active_diff_features_);
+            if (differential_feature_bin_mode_ != "lookup") {
+              PREFETCH_T0(diff_feature_raw_values +
+                          static_cast<size_t>(pf_first_idx) * num_active_diff_features_);
+              PREFETCH_T0(diff_feature_raw_values +
+                          static_cast<size_t>(pf_second_idx) * num_active_diff_features_);
+            }
             if (!ORDERED) {
               PREFETCH_T0(gradients + pf_idx);
               PREFETCH_T0(hessians + pf_idx);
@@ -237,12 +240,6 @@ class MultiValDensePairwiseLambdarankBin
           const BIN_TYPE* first_data_ptr = this->data_.data() + this->RowPtr(first_idx);
           const BIN_TYPE* second_data_ptr = this->data_.data() + this->RowPtr(second_idx);
 
-          const float* first_row_diff_feature_raw_values =
-              diff_feature_raw_values +
-              static_cast<size_t>(first_idx) * num_active_diff_features_;
-          const float* second_row_diff_feature_raw_values =
-              diff_feature_raw_values +
-              static_cast<size_t>(second_idx) * num_active_diff_features_;
           for (int active_j = 0; active_j < num_active_diff_features_; ++active_j) {
             const int original_feature_slot = active_diff_feature_to_original_feature_slot_[active_j];
             uint32_t first_bin = static_cast<uint32_t>(first_data_ptr[original_feature_slot]);
@@ -262,7 +259,7 @@ class MultiValDensePairwiseLambdarankBin
             }
 
             const uint32_t diff_bin =
-                active_diff_feature_bin_mappers_[active_j]->GetPairwiseBinRange(first_bin, second_bin).first;
+                active_diff_feature_bin_mappers_[active_j]->PairwiseBinToBin(first_bin, second_bin);
             // The original row-wise bins already exclude feature-group offsets.
             // Differential features still need the single-feature-group packing fix below.
             const uint32_t bin = diff_bin + active_diff_feature_bin_value_offsets_[active_j];
@@ -420,7 +417,7 @@ class MultiValDensePairwiseLambdarankBin
 
   void InitDiffFeatureRawValueBuffer(data_size_t num_data) {
     num_active_diff_features_ = static_cast<int>(active_diff_feature_slots_.size());
-    if (num_active_diff_features_ == 0) {
+    if (num_active_diff_features_ == 0 || differential_feature_bin_mode_ == "lookup") {
       return;
     }
     diff_feature_raw_values_.resize(

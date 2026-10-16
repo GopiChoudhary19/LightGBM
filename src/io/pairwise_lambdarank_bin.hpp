@@ -152,6 +152,11 @@ class PairwiseRankingDiffIterator: public BinIterator {
     }
     first_prev_index_ = first_data_index;
     second_prev_index_ = second_data_index;
+    if (diff_feature_bin_mapper_->HasPairwiseBinLookup()) {
+      return diff_feature_bin_mapper_->PairwiseBinToBin(
+          first_unpaired_bin_iterator_->Get(first_data_index),
+          second_unpaired_bin_iterator_->Get(second_data_index));
+    }
     double diff_value = 0.0;
     if (raw_values_ == nullptr) {
       const uint32_t first_bin = first_unpaired_bin_iterator_->Get(first_data_index);

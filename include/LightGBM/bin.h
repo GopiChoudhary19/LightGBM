@@ -198,7 +198,13 @@ class BinMapper {
       static_cast<size_t>(pairwise_bin_num_) * pairwise_bin_num_ * 2;
   }
 
-  
+  bool HasPairwiseBinLookup() const { return !pairwise_bin_lookup_.empty(); }
+
+  uint32_t PairwiseBinToBin(uint32_t first_bin, uint32_t second_bin) const {
+    return pairwise_bin_lookup_[static_cast<size_t>(first_bin) * pairwise_bin_num_ + second_bin];
+  }
+
+  void InitPairwiseBinLookup(uint32_t num_original_bin);
 
   void InitPairwiseBinRanges(uint32_t num_original_bin, int inner_feature_index);
 
@@ -280,6 +286,7 @@ class BinMapper {
   uint32_t most_freq_bin_;
   uint32_t pairwise_bin_num_;
   std::vector<uint32_t> pairwise_bin_ranges_;
+  std::vector<uint32_t> pairwise_bin_lookup_;
   int inner_feature_index_;
 };
 

@@ -1014,12 +1014,14 @@ struct Config {
   // desc = mode for discretizing differential feature into bins
   // desc = used only in ``pairwise_lambdarank`` application and with use_differential_feature_in_pairwise_ranking = true
   // desc = can be ``ternary``, ``exact`` or ``lookup``
-  // desc = when using ``exact``, ``pairwise_lambdarank_use_bin_lookup_table`` must be ``true``
+  // desc = ``lookup`` assigns each ordered pair of pointwise bins a unique differential-bin ID: ``first_bin * B + second_bin``, where ``B`` is the number of pointwise bins
+  // desc = ``lookup`` uses ``B * B`` bins, including pairs containing missing bins, and does not require retained raw feature values
+  // desc = when using ``exact`` or ``lookup``, ``pairwise_lambdarank_use_bin_lookup_table`` must be ``true``
   std::string differential_feature_bin_mode = std::string("ternary");
 
   // desc = whether to restrict differential-feature bin search with a lookup table based on the paired original-feature bins
   // desc = used only in ``pairwise_lambdarank`` application when differential features are enabled
-  // desc when enabled, must use ``differential_feature_bin_mode`` = ``exact``
+  // desc = when enabled, ``differential_feature_bin_mode`` must be ``exact`` or ``lookup``
   bool pairwise_lambdarank_use_bin_lookup_table = false;
 
   // desc = whether to additionaly perform indirect document comparison in pairwise ranking

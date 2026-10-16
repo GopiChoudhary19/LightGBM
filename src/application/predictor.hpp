@@ -773,6 +773,12 @@ class Predictor {
           }
           if (config.use_differential_feature_in_pairwise_ranking) {
             std::set<int> feature_set;
+            if (boosting_->HasPairwiseBinLookup()) {
+              // Even two implicit zeros can map to a nonzero pair-bin ID.
+              for (int feature = 0; feature < num_features; ++feature) {
+                feature_set.insert(feature);
+              }
+            }
             for (const auto& pair : oneline_features_in_query[pair_indices[i].first]) {
               feature_set.insert(pair.first);
             }
@@ -799,7 +805,8 @@ class Predictor {
                 val2 = second_feature_iterator->second;
               }
               // Log::Warning("feature = %d, val1 = %f, val2 = %f", feature, val1, val2);
-              oneline_features.push_back(std::make_pair(feature + 2 * num_features, val1 - val2));
+              oneline_features.push_back(std::make_pair(feature + 2 * num_features,
+                  boosting_->PairwiseFeatureValue(feature, val1, val2)));
             }
           }
 

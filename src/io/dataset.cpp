@@ -1062,7 +1062,8 @@ void Dataset::CreatePairWiseRankingData(const Dataset* dataset, const bool is_va
   std::vector<std::vector<int>> diff_feature_groups =
     FindGroups(diff_feature_bin_mappers, used_diff_features, Common::Vector2Ptr<int>(sampled_indices_.get()).data(), Common::VectorSize<int>(*sampled_indices_).data(), static_cast<int>(sampled_indices_->size()), num_total_sampled_data_, config.seed, is_use_gpu, false, &group_is_multi_val);
 
-  if (is_validation || config.pairwise_lambdarank_keep_raw_feature_values) { // use single feature groups when keep original feature values for difference in training
+  if (is_validation || config.pairwise_lambdarank_keep_raw_feature_values ||
+      config.differential_feature_bin_mode == "lookup") { // lookup uses both pointwise bins of each feature
     std::vector<std::vector<int>> flatten_feature_groups;
     for (const auto& features_in_group : diff_feature_groups) {
       for (const int feature_index : features_in_group) {
@@ -1133,10 +1134,20 @@ void Dataset::CreatePairWiseRankingData(const Dataset* dataset, const bool is_va
         const int diff_feature_index = features_in_group[j];
         const int original_feature_index = dataset->InnerFeatureIndex(diff_feature_index);
         const BinMapper* original_feature_bin_mapper = dataset->FeatureBinMapper(original_feature_index);
-        BinIterator* original_feature_iterator = dataset->FeatureIterator(original_feature_index);
+        std::unique_ptr<BinIterator> original_feature_iterator(dataset->FeatureIterator(original_feature_index));
         original_feature_iterator->Reset(0);
         for (int k = 0; k < dataset->num_data(); ++k) {
-          feature_group.PushData(tid, j, k, original_feature_bin_mapper->BinToValue(original_feature_iterator->Get(k)));
+          const uint32_t bin = original_feature_iterator->Get(k);
+          if (config.differential_feature_bin_mode == "lookup") {
+            // Preserve the original bin, including NaN, without a value round trip.
+            const uint32_t most_freq_bin = original_feature_bin_mapper->GetMostFreqBin();
+            if (bin != most_freq_bin) {
+              feature_group.bin_data_->Push(tid, k,
+                  bin + feature_group.bin_offsets_[j] - static_cast<uint32_t>(most_freq_bin == 0));
+            }
+          } else {
+            feature_group.PushData(tid, j, k, original_feature_bin_mapper->BinToValue(bin));
+          }
         }
       }
 
@@ -2215,6 +2226,9 @@ void Dataset::CreatePairwiseRankingDifferentialFeatures(
   for (int i = 0; i < num_original_features; ++i) {
     if (bin_mappers[i] == nullptr || bin_mappers[i]->is_trivial() || bin_mappers[i]->bin_type() != BinType::NumericalBin) {
       differential_feature_bin_mappers->operator[](i).reset(nullptr);
+    } else if (config.differential_feature_bin_mode == "lookup") {
+      differential_feature_bin_mappers->operator[](i).reset(new BinMapper());
+      differential_feature_bin_mappers->operator[](i)->InitPairwiseBinLookup(bin_mappers[i]->num_bin());
     } else {
       const data_size_t num_samples_for_feature = static_cast<data_size_t>(sample_values[i].size());
       if (config.zero_as_missing) {

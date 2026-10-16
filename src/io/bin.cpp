@@ -49,6 +49,7 @@ BinMapper::BinMapper(const BinMapper& other) {
   most_freq_bin_ = other.most_freq_bin_;
   pairwise_bin_num_ = other.pairwise_bin_num_;
   pairwise_bin_ranges_ = other.pairwise_bin_ranges_;
+  pairwise_bin_lookup_ = other.pairwise_bin_lookup_;
   inner_feature_index_ = other.inner_feature_index_;
 }
 
@@ -59,9 +60,36 @@ BinMapper::BinMapper(const void* memory) {
 BinMapper::~BinMapper() {
 }
 
+void BinMapper::InitPairwiseBinLookup(uint32_t num_original_bin) {
+  const uint64_t num_pairs = static_cast<uint64_t>(num_original_bin) * num_original_bin;
+  CHECK_LE(num_pairs, static_cast<uint64_t>(std::numeric_limits<int>::max()));
+  pairwise_bin_num_ = num_original_bin;
+  pairwise_bin_ranges_.clear();
+  num_bin_ = static_cast<int>(num_pairs);
+  bin_type_ = BinType::NumericalBin;
+  // Every ordered pair, including pairs of missing bins, has its own ID.
+  missing_type_ = MissingType::None;
+  default_bin_ = 0;
+  // Use ID 0 as the implicit histogram bin.
+  most_freq_bin_ = 0;
+  sparse_rate_ = 0.0;
+  is_trivial_ = num_bin_ <= 1;
+  min_val_ = 0.0;
+  max_val_ = num_bin_ - 1;
+  inner_feature_index_ = -1;
+  pairwise_bin_lookup_.resize(num_bin_);
+  bin_upper_bound_.resize(num_bin_);
+  for (int i = 0; i < num_bin_; ++i) {
+    pairwise_bin_lookup_[i] = static_cast<uint32_t>(i);
+    bin_upper_bound_[i] = static_cast<double>(i);
+  }
+  bin_upper_bound_.back() = std::numeric_limits<double>::infinity();
+}
+
 void BinMapper::InitPairwiseBinRanges(uint32_t num_original_bin, int inner_feature_index) {
   pairwise_bin_num_ = num_original_bin;
   pairwise_bin_ranges_.clear();
+  pairwise_bin_lookup_.clear();
   if (pairwise_bin_num_ == 0 || num_bin_ <= 0) {
     return;
   }
@@ -355,6 +383,7 @@ void BinMapper::FindBin(double* values, int num_sample_values, size_t total_samp
                         const std::vector<double>& forced_upper_bounds, bool force_ternary_bin) {
   pairwise_bin_num_ = 0;
   pairwise_bin_ranges_.clear();
+  pairwise_bin_lookup_.clear();
   int na_cnt = 0;
   int non_na_cnt = 0;
   for (int i = 0; i < num_sample_values; ++i) {
@@ -579,6 +608,7 @@ void BinMapper::CopyTo(char * buffer) const {
 void BinMapper::CopyFrom(const char * buffer) {
   pairwise_bin_num_ = 0;
   pairwise_bin_ranges_.clear();
+  pairwise_bin_lookup_.clear();
   std::memcpy(&num_bin_, buffer, sizeof(num_bin_));
   buffer += VirtualFileWriter::AlignedSize(sizeof(num_bin_));
   std::memcpy(&missing_type_, buffer, sizeof(missing_type_));

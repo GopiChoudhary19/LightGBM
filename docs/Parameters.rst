@@ -1236,13 +1236,19 @@ Objective Parameters
 
    -  can be ``ternary``, ``exact`` or ``lookup``
 
-   -  when using ``exact``, ``pairwise_lambdarank_use_bin_lookup_table`` must be ``true``
+   -  ``lookup`` assigns each ordered pair of pointwise bins a unique differential-bin ID: ``first_bin * B + second_bin``, where ``B`` is the number of pointwise bins
+
+   -  ``lookup`` uses ``B * B`` bins, including pairs containing missing bins, and does not require retained raw feature values
+
+   -  when using ``exact`` or ``lookup``, ``pairwise_lambdarank_use_bin_lookup_table`` must be ``true``
 
 -  ``pairwise_lambdarank_use_bin_lookup_table`` :raw-html:`<a id="pairwise_lambdarank_use_bin_lookup_table" title="Permalink to this parameter" href="#pairwise_lambdarank_use_bin_lookup_table">&#x1F517;&#xFE0E;</a>`, default = ``false``, type = bool
 
    -  whether to restrict differential-feature bin search with a lookup table based on the paired original-feature bins
 
    -  used only in ``pairwise_lambdarank`` application when differential features are enabled
+
+   -  when enabled, ``differential_feature_bin_mode`` must be ``exact`` or ``lookup``
 
 -  ``pairwise_lambdarank_model_indirect_comparison`` :raw-html:`<a id="pairwise_lambdarank_model_indirect_comparison" title="Permalink to this parameter" href="#pairwise_lambdarank_model_indirect_comparison">&#x1F517;&#xFE0E;</a>`, default = ``false``, type = bool
 

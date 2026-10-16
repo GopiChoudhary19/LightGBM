@@ -15,6 +15,17 @@ uint32_t DensePairwiseRankingDiffBin<VAL_T, IS_4BIT>::GetBinAt(const data_size_t
   const data_size_t first_data_index = this->paired_ranking_item_index_map_[paired_data_index].first;
   const data_size_t second_data_index = this->paired_ranking_item_index_map_[paired_data_index].second;
 
+  if (diff_bin_mappers_->front()->HasPairwiseBinLookup()) {
+    const auto* original_mapper = ori_bin_mappers_->front().get();
+    const uint32_t original_offset = 1u - static_cast<uint32_t>(original_mapper->GetMostFreqBin() == 0);
+    const auto decode = [original_mapper, original_offset](uint32_t bin) {
+      return bin == 0 ? original_mapper->GetMostFreqBin() : bin - original_offset;
+    };
+    const uint32_t first_bin = decode(this->unpaired_bin_->data(first_data_index));
+    const uint32_t second_bin = decode(this->unpaired_bin_->data(second_data_index));
+    return diff_bin_mappers_->front()->PairwiseBinToBin(first_bin, second_bin) + diff_bin_offset_;
+  }
+
   // Log::Warning("raw_values_ == nullptr = %d", static_cast<int>(raw_values_ == nullptr));
 
   double diff_value = 0.0;
@@ -353,14 +364,14 @@ data_size_t DensePairwiseRankingBin<VAL_T, IS_4BIT, ITERATOR_TYPE>::SplitInner(u
                         const data_size_t* data_indices, data_size_t cnt,
                         data_size_t* lte_indices,
                         data_size_t* gt_indices) const {
-  auto th = static_cast<VAL_T>(threshold + min_bin);
-  auto t_zero_bin = static_cast<VAL_T>(min_bin + default_bin);
+  auto th = threshold + min_bin;
+  auto t_zero_bin = min_bin + default_bin;
   if (most_freq_bin == 0) {
     --th;
     --t_zero_bin;
   }
-  const auto minb = static_cast<VAL_T>(min_bin);
-  const auto maxb = static_cast<VAL_T>(max_bin);
+  const auto minb = min_bin;
+  const auto maxb = max_bin;
   data_size_t lte_count = 0;
   data_size_t gt_count = 0;
   data_size_t* default_indices = gt_indices;
