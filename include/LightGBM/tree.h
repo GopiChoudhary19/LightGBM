@@ -9,6 +9,7 @@
 #include <LightGBM/dataset.h>
 #include <LightGBM/meta.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <map>
@@ -578,6 +579,7 @@ inline void Tree::Split(int leaf, int feature, int real_feature,
   // update leaf depth
   leaf_depth_[num_leaves_] = leaf_depth_[leaf] + 1;
   leaf_depth_[leaf]++;
+  max_depth_ = std::max(max_depth_, leaf_depth_[num_leaves_]);
   if (track_branch_features_) {
     branch_features_[num_leaves_] = branch_features_[leaf];
     branch_features_[num_leaves_].push_back(split_feature_[new_node_idx]);
