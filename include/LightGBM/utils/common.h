@@ -1005,7 +1005,13 @@ class Timer {
   }
 
 #else
+  // Avoid constructing temporary strings for disabled profiling, especially
+  // for literal names in histogram and split-search hot loops.
+  void Start(const char*) {}
+
   void Start(const std::string&) {}
+
+  void Stop(const char*) {}
 
   void Stop(const std::string&) {}
 #endif  // TIMETAG
@@ -1055,6 +1061,8 @@ class FunctionTimer {
   std::string name_;
   Timer& timer_;
 #else
+  FunctionTimer(const char*, Timer&) {}
+
   FunctionTimer(const std::string&, Timer&) {}
 #endif  // TIMETAG
 };

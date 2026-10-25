@@ -28,6 +28,9 @@ void UpdatePointwiseScoresForOneQuery(double* score_pointwise, const double* sco
   global_timer.Start("pairwise_lambdarank::UpdatePointwiseScoresForOneQuery part 1");
   std::vector<double> gradients(cnt_pointwise);
   std::vector<double> hessians(cnt_pointwise);
+  const IndirectComparisonNeighbors indirect_neighbors(ranks,
+      left2right2pair_map, right2left2pair_map, indirect_comparison_max_rank,
+      model_indirect_comparison, model_conditional_rel, truncation_level);
 
   for (data_size_t i = 0; i < cnt_pointwise - 1 && i < truncation_level; ++i) {
     if (score_pointwise[sorted_idx[i]] == kMinScore) { continue; }
@@ -41,13 +44,13 @@ void UpdatePointwiseScoresForOneQuery(double* score_pointwise, const double* sco
       double delta_score_total_weight = 0.0;
       int comparisons_direct = 0;
 
-      data_size_t pair = get_pair_index(left2right2pair_map[indexLeft], indexRight);
+      data_size_t pair = indirect_neighbors.Pair(indexLeft, indexRight);
       if (pair != static_cast<data_size_t>(-1)) {
         delta_score += score_pairwise[pair];
         ++comparisons_direct;
       }
 
-      data_size_t pair_inverse = get_pair_index(left2right2pair_map[indexRight], indexLeft);
+      data_size_t pair_inverse = indirect_neighbors.Pair(indexRight, indexLeft);
       if (pair_inverse != static_cast<data_size_t>(-1)) {
         delta_score -= score_pairwise[pair_inverse];
         ++comparisons_direct;
@@ -71,6 +74,7 @@ void UpdatePointwiseScoresForOneQuery(double* score_pointwise, const double* sco
         process_indirect_comparisons_optimized(
           indexLeft, indexRight, ranks, left2right2pair_map, right2left2pair_map,
           indirect_comparison_max_rank, indirect_comparison_above_only, model_conditional_rel,
+          indirect_neighbors,
           // Case 1: (+, −)
           [&](data_size_t idxA, data_size_t idxB) noexcept { apply_score(idxA, idxB, +1, -1); },
           // Case 2: (−, −)

@@ -810,7 +810,7 @@ class Dataset {
                                    const score_t* gradients,
                                    const score_t* hessians,
                                    TrainingShareStates* share_state,
-                                   hist_t* hist_data) const;
+                                   hist_t* hist_data, const int8_t* is_feature_used = nullptr) const;
 
   template <bool USE_QUANT_GRAD, int HIST_BITS>
   inline void ConstructHistograms(

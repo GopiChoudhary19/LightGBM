@@ -21,6 +21,108 @@
 #include <numeric>
 
 namespace LightGBM {
+  // The indirect-comparison loops repeatedly reject the same out-of-rank
+  // neighbors. Materialize their surviving subsequences once per query,
+  // without changing the order in which comparison contributions are added.
+  class IndirectComparisonNeighbors {
+   public:
+    using Neighbor = std::pair<short, data_size_t>;
+    using Rows = std::vector<std::vector<Neighbor>>;
+    struct Range {
+      const Neighbor* first;
+      const Neighbor* last;
+      const Neighbor* begin() const { return first; }
+      const Neighbor* end() const { return last; }
+    };
+
+    IndirectComparisonNeighbors(const std::vector<int>& ranks,
+        const Rows& left_to_right, const Rows& right_to_left,
+        int max_rank, bool enabled, bool conditional, int cache_rank = -1)
+        : filtered_(enabled && max_rank < static_cast<int>(ranks.size())),
+          ranks_(ranks), original_left_(left_to_right) {
+      if (filtered_) {
+        Filter(right_to_left, ranks, max_rank, &right_offsets_, &right_neighbors_);
+        if (!conditional) {
+          Filter(left_to_right, ranks, max_rank, &left_offsets_, &left_neighbors_);
+        }
+      }
+      if (cache_rank >= 0 && !ranks.empty()) {
+        const int count = static_cast<int>(ranks.size());
+        cached_ranks_ = std::min({count, 64, (1 << 20) / count,
+            std::max(cache_rank, enabled ? max_rank : 0)});
+        const size_t cells = static_cast<size_t>(cached_ranks_) * count;
+        cached_left_.assign(cells, -1);
+        cached_right_.assign(cells, -1);
+        for (int first = 0; first < count; ++first) {
+          for (const auto& pair : left_to_right[first]) {
+            if (ranks[first] < cached_ranks_) {
+              auto& cached = cached_left_[static_cast<size_t>(ranks[first]) * count + pair.first];
+              if (cached == -1) { cached = pair.second; }
+            }
+            if (ranks[pair.first] < cached_ranks_) {
+              auto& cached = cached_right_[static_cast<size_t>(ranks[pair.first]) * count + first];
+              if (cached == -1) { cached = pair.second; }
+            }
+          }
+        }
+      }
+    }
+
+    Range Right(int index, const Rows& original) const {
+      return Get(index, original, right_offsets_, right_neighbors_);
+    }
+    Range Left(int index, const Rows& original) const {
+      return Get(index, original, left_offsets_, left_neighbors_);
+    }
+
+    data_size_t Pair(int first, int second) const {
+      // Every direct comparison has a top-truncation endpoint, and every
+      // indirect comparison has a top-max-rank endpoint. Cache their rows and
+      // columns rather than a quadratic matrix for every document pair.
+      if (ranks_[first] < cached_ranks_) {
+        return cached_left_[static_cast<size_t>(ranks_[first]) * ranks_.size() + second];
+      }
+      if (ranks_[second] < cached_ranks_) {
+        return cached_right_[static_cast<size_t>(ranks_[second]) * ranks_.size() + first];
+      }
+      return get_pair_index(original_left_[first], static_cast<short>(second));
+    }
+
+   private:
+    static void Filter(const Rows& rows, const std::vector<int>& ranks,
+        int max_rank, std::vector<size_t>* offsets, std::vector<Neighbor>* neighbors) {
+      offsets->reserve(rows.size() + 1);
+      offsets->push_back(0);
+      for (const auto& row : rows) {
+        for (const auto& neighbor : row) {
+          if (ranks[neighbor.first] < max_rank) {
+            neighbors->push_back(neighbor);
+          }
+        }
+        offsets->push_back(neighbors->size());
+      }
+      // Keep valid pointers even when every neighbor was filtered out.
+      neighbors->emplace_back(0, 0);
+    }
+
+    Range Get(int index, const Rows& original, const std::vector<size_t>& offsets,
+        const std::vector<Neighbor>& neighbors) const {
+      if (filtered_ && !offsets.empty()) {
+        return {neighbors.data() + offsets[index], neighbors.data() + offsets[index + 1]};
+      }
+      const auto& row = original[index];
+      return {row.data(), row.empty() ? row.data() : row.data() + row.size()};
+    }
+
+    bool filtered_;
+    std::vector<size_t> right_offsets_, left_offsets_;
+    std::vector<Neighbor> right_neighbors_, left_neighbors_;
+    const std::vector<int>& ranks_;
+    const Rows& original_left_;
+    int cached_ranks_ = 0;
+    std::vector<data_size_t> cached_left_, cached_right_;
+  };
+
   template <
     typename Case1Handler, typename Case2Handler,
     typename Case3Handler, typename Case4Handler>
@@ -33,6 +135,7 @@ namespace LightGBM {
     int indirect_comparison_max_rank,
     bool indirect_comparison_above_only,
     bool model_conditional_rel,
+    const IndirectComparisonNeighbors& neighbors,
     Case1Handler&& case1,
     Case2Handler&& case2,
     Case3Handler&& case3,
@@ -42,7 +145,7 @@ namespace LightGBM {
     int rankRight = ranks[indexRight];
 
     // ----------- First loop: right2left2pair_map neighbors -----------
-    for (const auto& p : right2left2pair_map[indexLeft]) {
+    for (const auto& p : neighbors.Right(indexLeft, right2left2pair_map)) {
       short indexO = p.first;
       data_size_t indexOLeft = p.second;
 
@@ -53,14 +156,14 @@ namespace LightGBM {
 
       // Case 1
       if (isOAboveBoth || (!indirect_comparison_above_only && !model_conditional_rel)) {
-        data_size_t indexORight = get_pair_index(left2right2pair_map[indexO], indexRight);
+        data_size_t indexORight = neighbors.Pair(indexO, indexRight);
         if (indexORight != static_cast<data_size_t>(-1))
           case1(indexORight, indexOLeft);
       }
 
       // Case 2
       if ((!indirect_comparison_above_only || isOAboveBoth) && !model_conditional_rel) {
-        data_size_t indexRightO = get_pair_index(left2right2pair_map[indexRight], indexO);
+        data_size_t indexRightO = neighbors.Pair(indexRight, indexO);
         if (indexRightO != static_cast<data_size_t>(-1))
           case2(indexRightO, indexOLeft);
       }
@@ -68,7 +171,7 @@ namespace LightGBM {
 
     // ----------- Second loop: left2right2pair_map neighbors -----------
     if (!model_conditional_rel) {
-      const auto& left_pairs = left2right2pair_map[indexLeft];
+      const auto left_pairs = neighbors.Left(indexLeft, left2right2pair_map);
       for (const auto& p : left_pairs) {
         short indexO = p.first;
         data_size_t indexLeftO = p.second;
@@ -79,12 +182,12 @@ namespace LightGBM {
         bool isOAboveBoth = (rankO < rankRight) && (rankO < rankLeft);
         if (!indirect_comparison_above_only || isOAboveBoth) {
           // Case 3
-          data_size_t indexORight = get_pair_index(left2right2pair_map[indexO], indexRight);
+          data_size_t indexORight = neighbors.Pair(indexO, indexRight);
           if (indexORight != static_cast<data_size_t>(-1))
             case3(indexORight, indexLeftO);
 
           // Case 4
-          data_size_t indexRightO = get_pair_index(left2right2pair_map[indexRight], indexO);
+          data_size_t indexRightO = neighbors.Pair(indexRight, indexO);
           if (indexRightO != static_cast<data_size_t>(-1))
             case4(indexRightO, indexLeftO);
         }
@@ -717,8 +820,9 @@ class PairwiseLambdarankNDCG: public LambdarankNDCG {
     }
     const double worst_score = score_pointwise[sorted_idx[worst_idx]];
     double sum_lambdas = 0.0;
-
-
+    const IndirectComparisonNeighbors indirect_neighbors(ranks,
+        left2right2pair_map, right2left2pair_map, indirect_comparison_max_rank_,
+        model_indirect_comparison_, model_conditional_rel_, truncation_level_);
     // start accumulate lambdas by pairs that contain at least one document above truncation level
     for (data_size_t i = 0; i < cnt_pointwise - 1 && i < truncation_level_; ++i) {
       if (score_pointwise[sorted_idx[i]] == kMinScore) { continue; }
@@ -753,13 +857,13 @@ class PairwiseLambdarankNDCG: public LambdarankNDCG {
         double delta_score_indirect = 0.0;
         int comparisons_indirect = 0;
 
-        data_size_t pair = get_pair_index(left2right2pair_map[indexLeft], indexRight);
+        data_size_t pair = indirect_neighbors.Pair(indexLeft, indexRight);
         if (pair != static_cast<data_size_t>(-1)) {
           delta_score += score_pairwise[pair];
           ++comparisons_direct;
         }
 
-        data_size_t pair_inverse = get_pair_index(left2right2pair_map[indexRight], indexLeft);
+        data_size_t pair_inverse = indirect_neighbors.Pair(indexRight, indexLeft);
         if (pair_inverse != static_cast<data_size_t>(-1)) {
           delta_score -= score_pairwise[pair_inverse];
           ++comparisons_direct;
@@ -780,6 +884,7 @@ class PairwiseLambdarankNDCG: public LambdarankNDCG {
           process_indirect_comparisons_optimized(
             indexLeft, indexRight, ranks, left2right2pair_map, right2left2pair_map,
             indirect_comparison_max_rank_, indirect_comparison_above_only_, model_conditional_rel_,
+            indirect_neighbors,
             // Case 1: (+, −)
             [&](data_size_t idxA, data_size_t idxB) noexcept { apply_score(idxA, idxB, +1, -1); },
             // Case 2: (−, −)
@@ -848,6 +953,7 @@ class PairwiseLambdarankNDCG: public LambdarankNDCG {
           process_indirect_comparisons_optimized(
             indexLeft, indexRight, ranks, left2right2pair_map, right2left2pair_map,
             indirect_comparison_max_rank_, indirect_comparison_above_only_, model_conditional_rel_,
+            indirect_neighbors,
             // Case 1: (+, −)
             [&](data_size_t idxA, data_size_t idxB) noexcept { apply_update(idxA, idxB, +1, -1); },
             // Case 2: (−, −)

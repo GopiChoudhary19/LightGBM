@@ -1672,11 +1672,11 @@ void Dataset::ConstructHistogramsMultiVal(const data_size_t* data_indices,
                                           const score_t* gradients,
                                           const score_t* hessians,
                                           TrainingShareStates* share_state,
-                                          hist_t* hist_data) const {
+                                          hist_t* hist_data, const int8_t* is_feature_used) const {
   Common::FunctionTimer fun_time("Dataset::ConstructHistogramsMultiVal",
                                  global_timer);
   share_state->ConstructHistograms<USE_INDICES, ORDERED, USE_QUANT_GRAD, HIST_BITS>(
-      data_indices, num_data, gradients, hessians, hist_data);
+      data_indices, num_data, gradients, hessians, hist_data, is_feature_used);
 }
 
 template <bool USE_INDICES, bool USE_HESSIAN, bool USE_QUANT_GRAD, int HIST_BITS>
@@ -1687,7 +1687,7 @@ void Dataset::ConstructHistogramsInner(
     TrainingShareStates* share_state, hist_t* hist_data) const {
   if (!share_state->is_col_wise) {
     return ConstructHistogramsMultiVal<USE_INDICES, false, USE_QUANT_GRAD, HIST_BITS>(
-        data_indices, num_data, gradients, hessians, share_state, hist_data);
+        data_indices, num_data, gradients, hessians, share_state, hist_data, is_feature_used.data());
   }
   std::vector<int> used_dense_group;
   int multi_val_groud_id = -1;

@@ -44,6 +44,143 @@ const size_t kInt16HistEntrySize = 2 * sizeof(int16_t);
 const int kHistOffset = 2;
 const double kSparseThreshold = 0.7;
 
+// A conservative support set: an unmarked bin is zero, while a marked bin may
+// have cancelled to zero. Logical bin IDs are unchanged, including bin zero.
+class HistogramBinMask {
+ public:
+  // Keep the current bitmap word while traversing descending bin IDs. The
+  // support set must not change while an iterator is in use.
+  class ReverseIterator {
+   public:
+    ReverseIterator() = default;
+
+    int Next() {
+      while (remaining_ == 0 && word_ > 0) { remaining_ = (*words_)[--word_]; }
+      if (remaining_ == 0) { return -1; }
+      const int bit = HighestBit(remaining_);
+      remaining_ &= ~(uint32_t{1} << bit);
+      return word_ * 32 + bit;
+    }
+
+   private:
+    friend class HistogramBinMask;
+    ReverseIterator(const std::vector<uint32_t>& words, int bin)
+        : words_(&words), word_(bin / 32),
+          remaining_(words[word_] & (~uint32_t{0} >> (31 - bin % 32))) {}
+
+    const std::vector<uint32_t>* words_ = nullptr;
+    int word_ = 0;
+    uint32_t remaining_ = 0;
+  };
+
+  bool valid() const { return valid_; }
+  void Invalidate() { valid_ = false; }
+
+  void Clear(hist_t* data, int num_bins) {
+    if (valid_ && num_bins_ == num_bins && Count() <= num_bins / 4) {
+      ForEach([data](int bin) {
+        const size_t index = 2 * static_cast<size_t>(bin);
+        data[index] = data[index + 1] = 0.0;
+      });
+    } else {
+      std::fill(data, data + 2 * static_cast<size_t>(num_bins), 0.0);
+    }
+    num_bins_ = num_bins;
+    bits_.assign((static_cast<size_t>(num_bins) + 31) / 32, 0);
+    valid_ = true;
+  }
+
+  void Mark(uint32_t bin) { bits_[bin / 32] |= uint32_t{1} << (bin % 32); }
+
+  void Unmark(uint32_t bin) { bits_[bin / 32] &= ~(uint32_t{1} << (bin % 32)); }
+
+  void FromHistogram(const hist_t* data, int num_bins) {
+    num_bins_ = num_bins;
+    bits_.resize((static_cast<size_t>(num_bins) + 31) / 32);
+    for (size_t word = 0; word < bits_.size(); ++word) {
+      uint32_t bits = 0;
+      const int first = static_cast<int>(word * 32);
+      const int length = std::min(32, num_bins - first);
+      for (int bit = 0; bit < length; ++bit) {
+        const size_t index = 2 * static_cast<size_t>(first + bit);
+        bits |= static_cast<uint32_t>(data[index] != 0.0 || data[index + 1] != 0.0) << bit;
+      }
+      bits_[word] = bits;
+    }
+    valid_ = true;
+  }
+
+  int Count() const {
+    int count = 0;
+    for (uint32_t bits : bits_) {
+#if (defined(__GNUC__) || defined(__clang__)) && (defined(__POPCNT__) || defined(__aarch64__))
+      count += __builtin_popcount(bits);
+#else
+      // Generic x86 builds otherwise call a scalar libgcc helper per word.
+      // This equivalent packed-bit count can vectorize without requiring
+      // extra CPU instructions or changing the target architecture.
+      bits -= (bits >> 1) & 0x55555555u;
+      bits = (bits & 0x33333333u) + ((bits >> 2) & 0x33333333u);
+      bits = (bits + (bits >> 4)) & 0x0f0f0f0fu;
+      count += static_cast<int>((bits * 0x01010101u) >> 24);
+#endif
+    }
+    return count;
+  }
+
+  void Union(const HistogramBinMask& other) {
+    for (size_t word = 0; word < bits_.size(); ++word) {
+      bits_[word] |= other.bits_[word];
+    }
+  }
+
+  template <typename Function>
+  void ForEach(const Function& function) const {
+    for (size_t word = 0; word < bits_.size(); ++word) {
+      for (uint32_t bits = bits_[word]; bits != 0; bits &= bits - 1) {
+        function(static_cast<int>(word * 32) + LowestBit(bits));
+      }
+    }
+  }
+
+  int Previous(int bin) const {
+    if (bin < 0 || num_bins_ == 0) { return -1; }
+    bin = std::min(bin, num_bins_ - 1);
+    int word = bin / 32;
+    uint32_t bits = bits_[word] & (~uint32_t{0} >> (31 - bin % 32));
+    while (bits == 0 && word > 0) { bits = bits_[--word]; }
+    return bits == 0 ? -1 : word * 32 + HighestBit(bits);
+  }
+
+  ReverseIterator Reverse(int bin) const {
+    if (!valid_ || bin < 0 || num_bins_ == 0) { return ReverseIterator(); }
+    return ReverseIterator(bits_, std::min(bin, num_bins_ - 1));
+  }
+
+ private:
+  static int LowestBit(uint32_t bits) {
+#if defined(__GNUC__) || defined(__clang__)
+    return __builtin_ctz(bits);
+#else
+    int result = 0;
+    while ((bits & 1) == 0) { bits >>= 1; ++result; }
+    return result;
+#endif
+  }
+  static int HighestBit(uint32_t bits) {
+#if defined(__GNUC__) || defined(__clang__)
+    return 31 - __builtin_clz(bits);
+#else
+    int result = 0;
+    while ((bits >>= 1) != 0) { ++result; }
+    return result;
+#endif
+  }
+  bool valid_ = false;
+  int num_bins_ = 0;
+  std::vector<uint32_t> bits_;
+};
+
 #define GET_GRAD(hist, i) hist[(i) << 1]
 #define GET_HESS(hist, i) hist[((i) << 1) + 1]
 
@@ -630,6 +767,14 @@ class MultiValBin {
                                          const score_t* ordered_gradients,
                                          const score_t* ordered_hessians,
                                          hist_t* out) const = 0;
+
+  // Optional feature-wise implementation. Keep the supplied row blocks and
+  // their reduction order, while using feature-local scratch histograms.
+  virtual bool ConstructHistogramsByFeature(const data_size_t* /*data_indices*/,
+      data_size_t /*num_data*/, data_size_t /*num_total_data*/, int /*num_blocks*/, data_size_t /*block_size*/,
+      const score_t* /*gradients*/, const score_t* /*hessians*/, bool /*ordered*/,
+      int /*num_threads*/, hist_t* /*out*/, const int8_t* /*is_feature_used*/ = nullptr,
+      HistogramBinMask* const* /*bin_masks*/ = nullptr) const { return false; }
 
   virtual void ConstructHistogramInt32(const data_size_t* data_indices,
                                        data_size_t start, data_size_t end,

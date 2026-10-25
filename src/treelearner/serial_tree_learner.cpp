@@ -485,20 +485,35 @@ void SerialTreeLearner::ConstructHistograms(
   } else {
     hist_t* ptr_smaller_leaf_hist_data =
         smaller_leaf_histogram_array_[0].RawData() - kHistOffset;
+    auto set_bin_masks = [this](FeatureHistogram* histograms) {
+      auto& masks = share_state_->histogram_bin_masks;
+      masks.resize(num_features_);
+      for (int feature = 0; feature < num_features_; ++feature) {
+        masks[feature] = histograms[feature].bin_mask();
+        if (share_state_->is_col_wise && masks[feature] != nullptr) {
+          masks[feature]->Invalidate();
+          masks[feature] = nullptr;
+        }
+      }
+    };
+    set_bin_masks(smaller_leaf_histogram_array_);
     train_data_->ConstructHistograms<false, 0>(
         is_feature_used, smaller_leaf_splits_->data_indices(),
         smaller_leaf_splits_->num_data_in_leaf(), gradients_, hessians_,
         ordered_gradients_.data(), ordered_hessians_.data(), share_state_.get(),
         ptr_smaller_leaf_hist_data);
+    share_state_->histogram_bin_masks.clear();
     if (larger_leaf_histogram_array_ != nullptr && !use_subtract) {
       // construct larger leaf
       hist_t* ptr_larger_leaf_hist_data =
           larger_leaf_histogram_array_[0].RawData() - kHistOffset;
+      set_bin_masks(larger_leaf_histogram_array_);
       train_data_->ConstructHistograms<false, 0>(
           is_feature_used, larger_leaf_splits_->data_indices(),
           larger_leaf_splits_->num_data_in_leaf(), gradients_, hessians_,
           ordered_gradients_.data(), ordered_hessians_.data(), share_state_.get(),
           ptr_larger_leaf_hist_data);
+      share_state_->histogram_bin_masks.clear();
     }
   }
 }
@@ -549,11 +564,10 @@ void SerialTreeLearner::FindBestSplitsFromHistograms(
 
   // find splits
   OMP_INIT_EX();
-  #pragma omp parallel for schedule(static) num_threads(share_state_->num_threads)
-  for (int feature_index = 0; feature_index < num_features_; ++feature_index) {
+  const auto find_splits_for_feature = [&](int feature_index) {
     OMP_LOOP_EX_BEGIN();
     if (!is_feature_used[feature_index]) {
-      continue;
+      return;
     }
     const int tid = omp_get_thread_num();
     if (config_->use_quantized_grad) {
@@ -586,7 +600,7 @@ void SerialTreeLearner::FindBestSplitsFromHistograms(
     // only has root leaf
     if (larger_leaf_splits_ == nullptr ||
         larger_leaf_splits_->leaf_index() < 0) {
-      continue;
+      return;
     }
 
     if (use_subtract) {
@@ -644,6 +658,30 @@ void SerialTreeLearner::FindBestSplitsFromHistograms(
                                larger_leaf_parent_output);
 
     OMP_LOOP_EX_END();
+  };
+  #pragma omp parallel num_threads(share_state_->num_threads)
+  {
+#ifdef TIMETAG
+    const std::string worker_timer = "Lookup::SplitWorker" + std::to_string(omp_get_thread_num());
+    global_timer.Start(worker_timer);
+#endif
+    if (config_->differential_feature_bin_mode == "lookup") {
+      // Lookup features have very different support sizes, even within one
+      // leaf. Small contiguous batches balance their scan/subtraction work.
+      // SplitInfo resolves equal gains by feature index, not evaluation order.
+      #pragma omp for schedule(dynamic, 4) nowait
+      for (int feature = 0; feature < num_features_; ++feature) {
+        find_splits_for_feature(feature);
+      }
+    } else {
+      #pragma omp for schedule(static) nowait
+      for (int feature = 0; feature < num_features_; ++feature) {
+        find_splits_for_feature(feature);
+      }
+    }
+#ifdef TIMETAG
+    global_timer.Stop(worker_timer);
+#endif
   }
   OMP_THROW_EX();
 
