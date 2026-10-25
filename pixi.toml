@@ -50,8 +50,8 @@ pytest-cov = "6.*"
 
 # dask dependencies are not needed on Windows, so split out separately here
 [feature.py311.target.unix.dependencies]
-dask = "2022.12.*"
-distributed = "2022.12.*"
+dask-core = "2024.4.*"
+distributed = "2024.4.*"
 
 [feature.r-macos-intel]
 platforms = ["osx-64"]

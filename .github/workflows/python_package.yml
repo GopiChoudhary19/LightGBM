@@ -35,7 +35,7 @@ env:
 
 jobs:
   test-linux-aarch64:
-    name: bdist wheel (aarch64-manylinux2014, gcc, Python 3.15)
+    name: bdist wheel (aarch64-manylinux2014, gcc, Python 3.12)
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     steps:
@@ -71,7 +71,7 @@ jobs:
             --env METHOD=wheel \
             --env OS_NAME=linux \
             --env PRODUCES_ARTIFACTS=true \
-            --env PYTHON_VERSION="3.15" \
+            --env PYTHON_VERSION="3.12" \
             --env TASK=bdist \
             -v "${PWD}":"${{ env.BUILD_DIRECTORY }}" \
             -w ${{ env.BUILD_DIRECTORY }} \
