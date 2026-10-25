@@ -2124,6 +2124,20 @@ def test_predict_contrib_int64():
     assert preds.shape[1] == X_test.shape[1] + 1
 
 
+def test_pred_contrib_after_update_adds_trees(rng):
+    X = rng.uniform(size=(500, 5))
+    y = X[:, 0] + 2 * X[:, 1] + rng.normal(scale=0.1, size=500)
+    bst = lgb.Booster({"objective": "regression", "num_leaves": 15, "verbose": -1}, lgb.Dataset(X, label=y))
+    for _ in range(3):
+        bst.update()
+    bst.predict(X, pred_contrib=True)
+    for _ in range(3):
+        bst.update()
+    contribs = bst.predict(X, pred_contrib=True)
+    assert bst.num_trees() == 6
+    np.testing.assert_allclose(contribs.sum(axis=1), bst.predict(X, raw_score=True), rtol=1e-5, atol=1e-6)
+
+
 @pytest.mark.skipif(psutil.virtual_memory().available / 1024 / 1024 / 1024 < 3, reason="not enough RAM")
 def test_int32_max_sparse_contribs(rng):
     params = {"objective": "binary"}
